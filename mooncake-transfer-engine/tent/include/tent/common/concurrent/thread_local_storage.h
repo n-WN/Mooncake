@@ -115,6 +115,12 @@ class ThreadLocalStorage {
 
     // Safe iteration over the values of all live threads that have called
     // get() on this instance.
+    //
+    // The per-instance mutex is held across each fn invocation; that is what
+    // keeps the T& alive for the duration of the call (thread exit
+    // deregisters the value under the same mutex). Consequently fn must not
+    // re-enter forEach on this instance, nor trigger a first-use get() of it
+    // on the current thread, or it will self-deadlock.
     void forEach(const std::function<void(T&)>& fn) {
         std::lock_guard<std::mutex> lock(control_->mutex);
         for (T* value : control_->values) {
