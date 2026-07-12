@@ -105,8 +105,19 @@ class ThreadLocalStorage {
             node.control = control_;
             // The caller holds a reference to *this, so the owner is alive
             // and registration cannot race ~ThreadLocalStorage's clear().
-            std::lock_guard<std::mutex> lock(control_->mutex);
-            control_->values.insert(&node.value);
+            try {
+                std::lock_guard<std::mutex> lock(control_->mutex);
+                control_->values.insert(&node.value);
+            } catch (...) {
+                // Registration failed (allocation in the set). Roll the map
+                // entry back so a caller that catches and retries get()
+                // re-runs registration, instead of being handed a value
+                // forEach() can never see. The registry mutex is released
+                // by the time erase runs ~ThreadNode, so its own
+                // lock-and-erase cannot deadlock here.
+                state.nodes.erase(it);
+                throw;
+            }
         }
         state.cached_id = id_;
         state.cached_value = &it->second.value;
@@ -118,9 +129,13 @@ class ThreadLocalStorage {
     //
     // The per-instance mutex is held across each fn invocation; that is what
     // keeps the T& alive for the duration of the call (thread exit
-    // deregisters the value under the same mutex). Consequently fn must not
-    // re-enter forEach on this instance, nor trigger a first-use get() of it
-    // on the current thread, or it will self-deadlock.
+    // deregisters the value under the same mutex). Consequently fn must not:
+    // re-enter forEach on this instance; trigger a first-use get() of it on
+    // the current thread; block on the exit of any thread that has used
+    // this instance (that thread's exit cleanup takes this mutex, e.g. do
+    // not signal-and-join a registered worker from inside fn); or nest
+    // forEach across two instances in opposite orders on two threads.
+    // Violations deadlock.
     void forEach(const std::function<void(T&)>& fn) {
         std::lock_guard<std::mutex> lock(control_->mutex);
         for (T* value : control_->values) {
