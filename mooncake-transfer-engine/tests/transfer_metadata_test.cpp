@@ -83,6 +83,57 @@ TEST_F(TransferMetadataTest, LocalSegmentTest) {
     ASSERT_EQ(re, 0);
 }
 
+TEST(TransferMetadataInstanceTest, LocalSegmentsShareProcessIdentity) {
+    TransferMetadata first(P2PHANDSHAKE);
+    TransferMetadata second(P2PHANDSHAKE);
+
+    auto first_desc = std::make_shared<TransferMetadata::SegmentDesc>();
+    first_desc->name = "first";
+    first_desc->protocol = "tcp";
+    ASSERT_EQ(first.addLocalSegment(LOCAL_SEGMENT_ID, first_desc->name,
+                                   std::move(first_desc)), 0);
+
+    auto second_desc = std::make_shared<TransferMetadata::SegmentDesc>();
+    second_desc->name = "second";
+    second_desc->protocol = "tcp";
+    ASSERT_EQ(second.addLocalSegment(LOCAL_SEGMENT_ID, second_desc->name,
+                                    std::move(second_desc)), 0);
+
+    const auto first_id =
+        first.getSegmentDescByID(LOCAL_SEGMENT_ID)->instance_id;
+    const auto second_id =
+        second.getSegmentDescByID(LOCAL_SEGMENT_ID)->instance_id;
+    EXPECT_EQ(first_id.size(), 32U);
+    EXPECT_EQ(second_id.size(), 32U);
+    EXPECT_NE(first_id, second_id);
+}
+
+TEST(TransferMetadataInstanceTest, InstanceIdentitySurvivesJsonRoundTrip) {
+    constexpr char kMetadataServer[] =
+        "http://127.0.0.1:8080/metadata";
+    TransferMetadata publisher(kMetadataServer);
+    auto local_desc = std::make_shared<TransferMetadata::SegmentDesc>();
+    local_desc->name = "instance-round-trip";
+    local_desc->protocol = "tcp";
+    ASSERT_EQ(publisher.addLocalSegment(LOCAL_SEGMENT_ID, local_desc->name,
+                                       std::move(local_desc)), 0);
+    ASSERT_EQ(publisher.updateLocalSegmentDesc(), 0);
+
+    TransferMetadata reader(kMetadataServer);
+    auto remote_desc = reader.getSegmentDescByName("instance-round-trip");
+    ASSERT_NE(remote_desc, nullptr);
+    EXPECT_EQ(remote_desc->instance_id.size(), 32U);
+    EXPECT_EQ(remote_desc->instance_id,
+              publisher.getSegmentDescByID(LOCAL_SEGMENT_ID)->instance_id);
+}
+
+TEST(TransferMetadataInstanceTest, LegacyDescriptorHasNoSyntheticIdentity) {
+    TransferMetadata reader("http://127.0.0.1:8080/metadata");
+    auto legacy_desc = reader.getSegmentDescByName("legacy-peer");
+    ASSERT_NE(legacy_desc, nullptr);
+    EXPECT_TRUE(legacy_desc->instance_id.empty());
+}
+
 // add and remove LocalMemoryBufferMeta
 TEST_F(TransferMetadataTest, LocalMemoryBufferTest) {
     auto segment_des = std::make_shared<TransferMetadata::SegmentDesc>();

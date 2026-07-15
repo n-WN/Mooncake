@@ -19,6 +19,9 @@
 #include <cassert>
 #include <set>
 #include <algorithm>
+#include <iomanip>
+#include <random>
+#include <sstream>
 #include <chrono>
 #include <exception>
 
@@ -28,6 +31,19 @@
 #include "transfer_metadata_plugin.h"
 
 namespace mooncake {
+namespace {
+
+std::string GenerateInstanceId() {
+    std::random_device random;
+    const uint64_t high = (static_cast<uint64_t>(random()) << 32) | random();
+    const uint64_t low = (static_cast<uint64_t>(random()) << 32) | random();
+    std::ostringstream id;
+    id << std::hex << std::setfill('0') << std::setw(16) << high << std::setw(16)
+       << low;
+    return id.str();
+}
+
+}  // namespace
 #ifdef ENABLE_MULTI_PROTOCOL
 // Split comma-separated protocol string into vector
 static std::vector<std::string> splitProtocols(const std::string &protocols) {
@@ -146,6 +162,7 @@ struct TransferHandshakeUtil {
 
 TransferMetadata::TransferMetadata(const std::string &conn_string) {
     next_segment_id_.store(1);
+    instance_id_ = GenerateInstanceId();
 
     std::string protocol = extractProtocolFromConnString(conn_string);
     std::string custom_key;
@@ -296,6 +313,7 @@ static int encodeMultiProtocolSegmentDesc(
     const TransferMetadata::SegmentDesc &desc, Json::Value &segmentJSON) {
     // Multi-protocol encoding for CXL+TCP or CXL+RDMA combination
     segmentJSON["name"] = desc.name;
+    if (!desc.instance_id.empty()) segmentJSON["instance_id"] = desc.instance_id;
     if (!desc.rdma_server_name.empty()) {
         segmentJSON["rdma_server_name"] = desc.rdma_server_name;
     }
@@ -389,6 +407,7 @@ int TransferMetadata::encodeSegmentDesc(const SegmentDesc &desc,
 #endif
 
     segmentJSON["name"] = desc.name;
+    if (!desc.instance_id.empty()) segmentJSON["instance_id"] = desc.instance_id;
     segmentJSON["protocol"] = desc.protocol;
     segmentJSON["tcp_data_port"] = desc.tcp_data_port;
     segmentJSON["tcp_proto_version"] = desc.tcp_proto_version;
@@ -587,6 +606,8 @@ decodeMultiProtocolSegmentDesc(Json::Value &segmentJSON,
                                const std::string &segment_name) {
     auto desc = std::make_shared<TransferMetadata::SegmentDesc>();
     desc->name = segmentJSON["name"].asString();
+    if (segmentJSON.isMember("instance_id"))
+        desc->instance_id = segmentJSON["instance_id"].asString();
     desc->tcp_data_port = segmentJSON["tcp_data_port"].asInt();
     desc->tcp_proto_version = segmentJSON.isMember("tcp_proto_version")
                                   ? segmentJSON["tcp_proto_version"].asInt()
@@ -744,6 +765,8 @@ TransferMetadata::decodeSegmentDesc(Json::Value &segmentJSON,
 
     auto desc = std::make_shared<SegmentDesc>();
     desc->name = segmentJSON["name"].asString();
+    if (segmentJSON.isMember("instance_id"))
+        desc->instance_id = segmentJSON["instance_id"].asString();
     desc->protocol = segmentJSON["protocol"].asString();
     desc->tcp_data_port = segmentJSON["tcp_data_port"].asInt();
     desc->tcp_proto_version = segmentJSON.isMember("tcp_proto_version")
@@ -1241,6 +1264,9 @@ int TransferMetadata::updateLocalSegmentDesc(uint64_t segment_id) {
 int TransferMetadata::addLocalSegment(SegmentID segment_id,
                                       const std::string &segment_name,
                                       std::shared_ptr<SegmentDesc> &&desc) {
+    if (segment_id == LOCAL_SEGMENT_ID && desc && desc->instance_id.empty()) {
+        desc->instance_id = instance_id_;
+    }
     RWSpinlock::WriteGuard guard(segment_lock_);
     segment_id_to_desc_map_[segment_id] = desc;
     segment_name_to_id_map_[segment_name] = segment_id;

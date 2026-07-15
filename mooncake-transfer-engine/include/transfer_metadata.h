@@ -105,6 +105,9 @@ class TransferMetadata {
 
     struct SegmentDesc {
         std::string name;
+        // Opaque process incarnation. It is absent on legacy descriptors;
+        // callers must not synthesize an identity for those peers.
+        std::string instance_id;
         std::string protocol;
         // this is for rdma/shm/urma
         std::vector<DeviceDesc> devices;
@@ -267,6 +270,8 @@ class TransferMetadata {
     bool p2p_handshake_mode_{false};
     std::string common_key_prefix_;
     std::string rpc_meta_prefix_;
+    // One identity per TransferMetadata owner, shared by all local segments.
+    std::string instance_id_;
     // local cache
     RWSpinlock segment_lock_;
     std::unordered_map<uint64_t, std::shared_ptr<SegmentDesc>>
